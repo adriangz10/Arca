@@ -13,17 +13,17 @@ export const CbteTipo = {
 
   // Facturas y comprobantes B (Emisor Responsable Inscripto a Consumidor Final, Exento o Monotributista)
   FACTURA_B: 6,
-  RECIBO_B: 7,
-  NOTA_DEBITO_B: 8,
-  NOTA_CREDITO_B: 9,
+  NOTA_DEBITO_B: 7,
+  NOTA_CREDITO_B: 8,
+  RECIBO_B: 9,
   NOTA_VENTA_CONTADO_B: 10,
 
   // Facturas y comprobantes C (Emisor Monotributista o Exento a cualquier receptor)
+  // Verificado contra FEParamGetTiposCbte de ARCA: no existe el código 14.
   FACTURA_C: 11,
-  RECIBO_C: 12,
-  NOTA_DEBITO_C: 13,
-  NOTA_CREDITO_C: 14,
-  NOTA_VENTA_CONTADO_C: 15,
+  NOTA_DEBITO_C: 12,
+  NOTA_CREDITO_C: 13,
+  RECIBO_C: 15,
 
   // Facturas y comprobantes M (Responsable Inscripto con régimen especial de retención)
   FACTURA_M: 51,

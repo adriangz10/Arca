@@ -5,54 +5,73 @@
 Este proyecto es una API REST robusta para la emisión, gestión y consulta de comprobantes electrónicos a través de los web services de ARCA/AFIP en Argentina. Está diseñada para ser consumida de forma sencilla por aplicaciones Frontend (como paneles de administración, puntos de venta o e-commerce).
 
 ### Arquitectura
-- **Backend:** Desarrollado en Node.js para la emisión y consulta de comprobantes (WSFE), gestión de tickets de acceso (WSAA) con validez automática de 12hs, base de datos relacional para almacenamiento y renderizado interno de PDF y códigos QR compatibles con la RG 4291.
-- **Stack Tecnológico:**
-  - **Framework:** Express 5.
-  - **Base de Datos:** better-sqlite3 operando en modo WAL (Write-Ahead Logging) para máxima concurrencia y velocidad.
-  - **Librería Core ARCA/AFIP:** `@arcasdk/core`
-  - **Lenguaje:** TypeScript usando módulos ESM.
+- **Backend:** Node.js + TypeScript (ESM), Express 5, `@arcasdk/core` (WSAA/WSFE), PDF con logo y QR (RG 4291).
+- **Base de datos:** MySQL (`mysql2`). El esquema se crea solo al arrancar.
+- **Multi-empresa:** cada empresa emisora (CUIT, datos fiscales, logo, punto de venta) vive en la tabla `empresas`.
 
-### Configuración Rápida
-1. Crear un archivo `.env` en la raíz (basado en un `.env.example`).
-2. Configurar la ruta de los certificados y claves (nunca comitear certificados o CUITs reales al repositorio).
-3. Seleccionar el entorno mediante la variable `NODE_ENV` (usar `development` para Homologación / testing y `production` para Producción).
+### Qué va en el `.env` y qué en la base
+| `.env` (solo secretos e infraestructura) | MySQL |
+|---|---|
+| Certificado del sistema (`ARCA_CERT_PATH` / `ARCA_KEY_PATH`; el CUIT sale del certificado) | `empresas`: CUIT, razón social, domicilio, condición IVA, IIBB, inicio de actividades, punto de venta, categoría y tope de Monotributo, qué vende, logo, ambiente |
+| Meta (`WHATSAPP_*`), Gemini, MySQL, `APP_ENCRYPTION_KEY`, `API_KEY` | `configuracion`: tope de consumidor final, minutos de sesión, consultar padrón, ambiente de ARCA para empresas nuevas |
 
 ---
 
 ## Bot de WhatsApp
 
-Permite facturar mandando un mensaje, un audio o la captura de una transferencia:
-_"Facturale $45.000 a consumidor final por servicio de diseño"_ o _"Factura al CUIT 30-71234567-1 por 120 mil más IVA de mantenimiento"_.
+**Regla de diseño:** la IA (Gemini) solo extrae datos del primer mensaje (monto, qué se vendió). El documento, la condición IVA, la letra de la factura, los importes y la llamada a ARCA son 100% determinísticos (`src/whatsapp/fiscal-engine.ts`).
 
-**Regla de diseño:** la IA (Gemini) solo extrae datos del mensaje. El tipo de factura, el cálculo de Neto/IVA/Total, las validaciones y la llamada a ARCA son 100% determinísticos (`src/whatsapp/fiscal-engine.ts`).
+### 1. Configuración inicial (primer mensaje)
+Si un número autorizado sin empresas escribe cualquier cosa (ej. _hola_), el bot arranca solo la configuración:
+CUIT → razón social → nombre de fantasía → domicilio comercial → condición IVA → Ingresos Brutos → inicio de actividades →
+punto de venta → (categoría y tope de Monotributo) → qué vende → email → conexión con ARCA (delegación o certificado propio) → **logo** → resumen → guardar.
+Recién ahí se puede facturar. Código: `src/whatsapp/registro-empresa.flow.ts`.
 
-### Flujo
-1. Meta envía el mensaje a `POST /webhooks/whatsapp` (se valida la firma y que el número esté autorizado).
-2. Gemini extrae monto, CUIT/DNI, concepto, etc. Si falta algo, el bot repregunta solo ese dato (borrador guardado 15 min en SQLite).
-3. Si hay CUIT, se consulta el padrón de ARCA para obtener nombre y condición IVA. Si falla, el bot pregunta la condición con una lista.
-4. Se decide el comprobante: emisor Monotributo/Exento → **C**; emisor RI → **A** si el cliente es RI/Monotributista, **B** si no.
-5. Si es Consumidor Final anónimo y el total supera `CONSUMIDOR_FINAL_TOPE`, se pide DNI/CUIT.
-6. Se muestra el resumen con botones **[Emitir ahora] [Corregir] [Cancelar]**. Nada se emite sin confirmar.
-7. La emisión se serializa por Punto de Venta (evita choques de numeración) y el PDF se manda por WhatsApp.
-8. Respondiendo (citando) el PDF con _"anulala"_ se emite la Nota de Crédito vinculada, previa confirmación.
-9. Si sos Monotributista y configurás `MONOTRIBUTO_TOPE_ANUAL`, avisa cuando pasás el 75% del tope.
+### 2. Venta (`src/whatsapp/venta.flow.ts`)
+Ejemplo: _"nueva venta de papel por 12000"_. Los datos que ya vinieron no se vuelven a preguntar; el orden es siempre el mismo:
 
-Comandos: `ayuda`, `últimas`, `cancelar`.
+1. **Monto** y **qué se vendió**.
+2. **¿A quién le facturás?** → Consumidor final · DNI · CUIT/CUIL.
+3. **Documento** y consulta al **padrón de ARCA**:
 
-### Configuración
-1. Crear una app en [developers.facebook.com](https://developers.facebook.com) con el producto **WhatsApp** y copiar `WHATSAPP_ACCESS_TOKEN` (usar un token permanente de System User para producción) y `WHATSAPP_PHONE_NUMBER_ID`.
-2. Completar las variables `WHATSAPP_*`, `GEMINI_API_KEY` y `ARCA_EMISOR_*` (ver `.env.example`).
-3. Exponer el servidor con HTTPS (ej. `ngrok http 3000` en desarrollo).
-4. En Meta → WhatsApp → Configuration → Webhook: URL `https://TU-DOMINIO/webhooks/whatsapp`, Verify token = `WHATSAPP_VERIFY_TOKEN`, y suscribirse al campo **messages**.
-5. `npm run dev` y escribirle al número del bot desde un número incluido en `WHATSAPP_ALLOWED_NUMBERS`.
+| El cliente pasa | Lo que detecta el bot | DocTipo | Condición IVA | Emisor RI | Emisor Mono/Exento |
+|---|---|---|---|---|---|
+| Nada (< tope) | Anónimo | 99 | 5 Cons. Final | B | C |
+| DNI | 7-8 dígitos | 96 | 5 Cons. Final | B | C |
+| 11 dígitos sin alta | Padrón vacío = CUIL | 86 | 5 Cons. Final | B | C |
+| 11 dígitos Exento | Padrón | 80 | 4 Exento | B | C |
+| 11 dígitos Monotributo | Padrón | 80 | 6 Monotributista | A | C |
+| 11 dígitos Resp. Inscripto | Padrón | 80 | 1 Resp. Inscripto | A | C |
 
-Para la consulta de padrón el certificado tiene que tener autorizado el servicio `ws_sr_constancia_inscripcion` (en homologación, desde WSASS). Si no, el bot funciona igual pero pregunta la condición IVA.
+   - Si el padrón no responde, el bot pregunta la condición del cliente con una lista.
+   - Con un DNI, el bot busca si tiene un CUIT activo (prefijos 20/27/23/24) y pregunta: _¿a su CUIT o como consumidor final con DNI?_
+4. El bot **anuncia la letra** (_"Le corresponde Factura A: ..."_) y pide lo que exige: razón social y domicilio para CUIT (domicilio obligatorio en la A), nombre para DNI/CUIL (opcional).
+5. **Resumen** con botones [Emitir] [Corregir] [Cancelar]. Corregir abre una lista (monto, qué vendiste, cliente, nombre, domicilio).
+6. Si ARCA rechaza, se muestran los códigos de error y se vuelve a la lista de corrección. Nada se emite sin confirmar.
 
-Prueba offline (sin ARCA, WhatsApp ni Gemini): `npm run test:whatsapp`.
+Otros comandos: `ayuda`, `últimas`, `cancelar`, `mi empresa`, `empresas`, `nueva empresa`, `cambiar logo`. Citando el PDF con _"anulala"_ se emite la Nota de Crédito.
+
+**Factura de Crédito Electrónica MiPyME:** con cada cliente CUIT el bot consulta `wsfecred.consultarMontoObligadoRecepcion`. Si está obligado y el total supera el mínimo, emite FCE A/B/C (201/206/211) con el CBU de la empresa (opcional 2101, se pide una vez y se guarda), la opción de transferencia SCA (opcional 27) y el vencimiento del pago. Si el servicio no responde, se emite la factura común con un aviso en el resumen. Las FCE no se anulan automáticamente con Nota de Crédito.
+
+### Servicios que hay que autorizar al certificado (WSASS en homologación / Administrador de Relaciones en producción)
+| Servicio | Para qué | Sin él |
+|---|---|---|
+| `wsfe` | Emitir comprobantes | No se puede facturar |
+| `ws_sr_constancia_inscripcion` | Padrón: condición IVA, nombre y domicilio del CUIT; CUIT de un DNI | El bot pregunta la condición (solo la primera vez por cliente) |
+| `wsfecred` | Saber si corresponde Factura de Crédito MiPyME | Factura común + aviso en el resumen |
+
+### Puesta en marcha
+1. App de WhatsApp en [developers.facebook.com](https://developers.facebook.com): `WHATSAPP_ACCESS_TOKEN` (token permanente de System User) y `WHATSAPP_PHONE_NUMBER_ID`.
+2. Completar el `.env` (ver `.env.example`). MySQL tiene que estar corriendo.
+3. Exponer el puerto con HTTPS (devtunnels / ngrok) y configurar el webhook en Meta: `https://TU-DOMINIO/webhooks/whatsapp`, campo **messages**.
+4. `npm run dev` y escribirle al bot desde un número de `WHATSAPP_ALLOWED_NUMBERS`.
+
+Para el padrón, el certificado necesita el servicio `ws_sr_constancia_inscripcion` (en homologación, desde WSASS). Sin él el bot funciona igual: pregunta la condición IVA.
+
+Prueba offline (usa una base MySQL temporal, sin ARCA/WhatsApp/Gemini): `npm run test:whatsapp`.
 
 ### Limitaciones
-- El lock de emisión y la deduplicación son en memoria/SQLite: pensado para **una sola instancia** del servidor. Para varias instancias, reemplazar `src/utils/keyed-mutex.ts` por un lock en Redis/BullMQ.
-- Single-tenant: factura siempre con el CUIT y certificado del `.env`.
+- El lock de emisión es en memoria: pensado para **una sola instancia**. Para varias, reemplazar `src/utils/keyed-mutex.ts` por un lock en Redis.
 
 ---
 
@@ -248,20 +267,7 @@ Estos códigos son utilizados como parámetros en los endpoints. Referencia extr
 - `13`: MONOTRIBUTISTA SOCIAL
 - `15`: IVA NO ALCANZADO
 
-## Empresas (multi-emisor) y MySQL
+## API REST
 
-Desde la v2 los datos viven en **MySQL** (`MYSQL_*` en `.env`). Al arrancar se crea la base `arca_facturacion`,
-el esquema, y se importan una sola vez los datos de la base SQLite anterior (`data/arca.db`).
-La empresa del `.env` (`ARCA_CUIT`) se crea sola y queda vinculada a `WHATSAPP_ALLOWED_NUMBERS`.
-
-**Por WhatsApp:**
-- `nueva empresa`: alta guiada (CUIT, razón social, nombre de fantasía, domicilio comercial, condición IVA,
-  Ingresos Brutos, inicio de actividades, punto de venta, categoría de Monotributo, email, logo y conexión con ARCA).
-- `empresas`: ver y elegir con cuál facturás · `mi empresa`: ver sus datos · `cambiar logo`: subir/quitar el logo del PDF.
-
-**Conexión con ARCA de cada empresa:**
-- *Delegación* (recomendado): la empresa delega en ARCA el servicio "Facturación Electrónica" al CUIT del certificado del `.env`.
-- *Certificado propio*: se mandan el `.crt` y el `.key` por el chat; la clave se guarda cifrada (AES-256-GCM con `APP_ENCRYPTION_KEY`).
-
-**API REST:** todas las rutas `/api/*` exigen el header `X-API-Key` (valor de `API_KEY`). Para elegir la empresa emisora
-se usa el header `X-Empresa-Cuit`; sin él se usa la empresa del `.env`.
+Todas las rutas `/api/*` exigen el header `X-API-Key` (valor de `API_KEY`). Para elegir la empresa emisora
+se usa el header `X-Empresa-Cuit`; sin él se usa la primera empresa registrada.

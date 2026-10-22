@@ -23,6 +23,8 @@ export interface DatosFacturaPdf {
   emisorIngresosBrutos?: string;
   emisorInicioActividades?: string; // YYYY-MM-DD o DD/MM/YYYY
   emisorNombreFantasia?: string;
+  /** Leyendas extra arriba de los totales (ej: datos de la Factura de Crédito MiPyME). */
+  notas?: string[];
   /** Ruta a un PNG o JPG que se dibuja arriba a la izquierda. */
   emisorLogoPath?: string;
 
@@ -135,7 +137,9 @@ export class ArcaPdfService {
       doc.text(`Condición frente al IVA: ${datos.emisorCondicionIva ?? "-"}`, 45, 132, { width: 225 });
 
       // --- CABECERA DERECHA: DATOS DEL COMPROBANTE ---
-      doc.fillColor("#111111").fontSize(14).font("Helvetica-Bold").text(datos.tipoComprobanteNombre.toUpperCase(), 320, 45);
+      // Títulos largos (ej: Factura de Crédito Electrónica MiPyMEs) van más chicos para entrar en una línea.
+      const titulo = datos.tipoComprobanteNombre.toUpperCase();
+      doc.fillColor("#111111").fontSize(titulo.length > 22 ? 9.5 : 14).font("Helvetica-Bold").text(titulo, 320, titulo.length > 22 ? 49 : 45, { width: 240, lineBreak: false });
       doc.fontSize(9).font("Helvetica-Bold").text(`Punto de Venta: ${ptoVtaFormatted}   Comp. Nro: ${nroFormatted}`, 320, 65);
       doc.font("Helvetica").fontSize(8).fillColor("#444444");
       doc.text(`Fecha de Emisión: ${fechaFormatted}`, 320, 80);
@@ -191,6 +195,12 @@ export class ArcaPdfService {
 
       // --- RESUMEN DE TOTALES (Pie de tabla) ---
       const totalesY = 660;
+      if (datos.notas && datos.notas.length > 0) {
+        doc.fontSize(8).font("Helvetica").fillColor("#222222");
+        datos.notas.forEach((nota, i) => {
+          doc.font(i === 0 ? "Helvetica-Bold" : "Helvetica").text(nota, 45, totalesY - 12 * (datos.notas!.length - i) - 4, { width: 300 });
+        });
+      }
       doc.moveTo(30, totalesY).lineTo(565, totalesY).lineWidth(0.5).stroke("#999999");
 
       doc.fontSize(9).font("Helvetica");

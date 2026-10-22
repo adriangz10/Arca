@@ -1,31 +1,36 @@
 import crypto from "node:crypto";
 import { execute, queryOne } from "../db/database.js";
-import type { BorradorFactura, CampoFaltante, FacturaResuelta } from "./fiscal-engine.js";
+import type { BorradorVenta, FacturaResuelta, PasoVenta } from "./fiscal-engine.js";
 import type { BorradorRegistro } from "./registro-empresa.flow.js";
 
 export type EstadoSesion =
   | "IDLE"
-  | "ESPERANDO_DATO" // se pidió un dato puntual (monto, concepto, documento, condición IVA)
-  | "ESPERANDO_CONFIRMACION" // se mostró el resumen con botones
-  | "ESPERANDO_CORRECCION" // el usuario tocó "Corregir"
-  | "ESPERANDO_CONFIRMACION_ANULACION"
-  | "REGISTRO_EMPRESA" // alta de una empresa nueva, paso a paso
+  | "REGISTRO_EMPRESA" // alta (o primera configuración) de una empresa, paso a paso
+  | "VENTA" // armando una factura: `venta.paso` dice qué dato se pidió
+  | "ANULACION" // se pidió confirmar una Nota de Crédito
   | "ESPERANDO_LOGO"; // cambio del logo de la empresa activa
+
+export interface SesionVenta {
+  paso: PasoVenta;
+  borrador: BorradorVenta;
+  /** Factura calculada que se mostró en el resumen (paso "confirmar"). */
+  factura?: FacturaResuelta;
+  /** Se está eligiendo qué dato corregir. */
+  corrigiendo?: boolean;
+}
 
 export interface SesionBot {
   telefono: string;
   estado: EstadoSesion;
-  /** Id del borrador vigente: los botones lo llevan para descartar toques viejos o repetidos. */
+  /** Id de los botones vigentes: descarta toques viejos o repetidos. */
   borradorId?: string;
-  borrador: BorradorFactura;
-  campoPendiente?: CampoFaltante;
-  facturaResuelta?: FacturaResuelta;
+  venta?: SesionVenta;
   anulacionFacturaId?: string;
   registro?: BorradorRegistro;
 }
 
 export function nuevaSesion(telefono: string): SesionBot {
-  return { telefono, estado: "IDLE", borrador: {} };
+  return { telefono, estado: "IDLE" };
 }
 
 export function nuevoBorradorId(): string {

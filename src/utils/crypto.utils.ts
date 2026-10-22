@@ -39,6 +39,15 @@ export function huellaCertificado(certPem: string): string {
   return crypto.createHash("sha256").update(certPem.trim()).digest("hex").slice(0, 16);
 }
 
+/** CUIT que figura en el certificado de ARCA (campo serialNumber "CUIT 20123456789"). */
+export function cuitDelCertificado(certPem: string): string | undefined {
+  try {
+    return new crypto.X509Certificate(certPem).subject.match(/CUIT\s*(\d{11})/i)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ResultadoValidacionCert {
   ok: boolean;
   error?: string;

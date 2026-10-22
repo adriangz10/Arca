@@ -4,6 +4,7 @@ import { DatabaseTicketStorage } from "../storage/database-ticket-storage.js";
 import { empresaActual } from "../empresas/empresa.context.js";
 import { EmpresaRepository } from "../empresas/empresa.repository.js";
 import type { Empresa } from "../empresas/empresa.types.js";
+import { ConfiguracionRepository } from "../config/configuracion.repository.js";
 
 export interface ArcaClient {
   arca: Arca;
@@ -17,7 +18,8 @@ export interface ArcaClient {
  * - Empresa con certificado PROPIO: usa su .crt/.key (la clave se guarda cifrada).
  * - Empresa en modo SISTEMA: usa el certificado del .env y factura "en representación"
  *   del CUIT de la empresa (requiere que la empresa delegue el servicio en ARCA).
- * - Sin empresa en contexto: la configuración del .env tal cual (compatibilidad).
+ * - Sin empresa en contexto (ej: consultar el padrón durante el alta): el certificado del
+ *   sistema con su propio CUIT y el ambiente de la tabla `configuracion`.
  */
 export class ArcaClientFactory {
   private static clientes = new Map<string, ArcaClient>();
@@ -25,7 +27,9 @@ export class ArcaClientFactory {
   /** Cliente para la empresa del contexto actual (o la del .env si no hay ninguna). */
   public static async obtener(empresa: Empresa | undefined = empresaActual()): Promise<ArcaClient> {
     const base = loadArcaConfig();
-    if (!empresa) return this.desdeConfig(base);
+    if (!empresa) {
+      return this.desdeConfig({ ...base, production: (await ConfiguracionRepository.obtener()).arcaProduccion });
+    }
 
     let cert = base.cert;
     let key = base.key;

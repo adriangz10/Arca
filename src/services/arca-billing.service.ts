@@ -83,6 +83,26 @@ export function getNombreTipoComprobante(tipo: TipoComprobante): {
   }
 }
 
+/** Leyendas de la Factura de Crédito MiPyME para el PDF (CBU, vencimiento, transferencia). */
+function notasFce(input: EmitirComprobanteInput): string[] | undefined {
+  const opc = new Map((input.opcionales ?? []).map((o) => [Number(o.id), String(o.valor)]));
+  if (!opc.has(2101)) return undefined;
+  const vto = input.fechaVencimientoPago?.replace(/^(\d{4})(\d{2})(\d{2})$/, "$3/$2/$1");
+  return [
+    "FACTURA DE CRÉDITO ELECTRÓNICA MiPyMEs (FCE) - Ley 27.440",
+    `CBU del emisor: ${opc.get(2101)}${opc.has(2102) ? ` (alias ${opc.get(2102)})` : ""}`,
+    vto ? `Vencimiento del pago: ${vto}` : null,
+    opc.get(27) ? `Transferencia: ${opc.get(27) === "ADC" ? "Agente de Depósito Colectivo (ADC)" : "Sistema de Circulación Abierta (SCA)"}` : null,
+  ].filter((l): l is string => Boolean(l));
+}
+
+function nombreTipoDoc(tipo: number): string {
+  if (tipo === DocTipo.CUIT) return "CUIT";
+  if (tipo === DocTipo.CUIL) return "CUIL";
+  if (tipo === DocTipo.DNI) return "DNI";
+  return "Consumidor Final";
+}
+
 export class ArcaBillingService {
   /** Cliente de ARCA de la empresa del contexto (o la del .env). */
   private static getClient() {
@@ -281,6 +301,10 @@ export class ArcaBillingService {
       payload.FchServHasta = input.fechaServicioHasta ?? fecha;
       payload.FchVtoPago = input.fechaVencimientoPago ?? fecha;
     }
+    // La Factura de Crédito MiPyME exige el vencimiento del pago aunque sea de productos.
+    if (input.fechaVencimientoPago && !payload.FchVtoPago) {
+      payload.FchVtoPago = input.fechaVencimientoPago;
+    }
 
     // Desglose de IVA
     if (input.alicuotasIva && input.alicuotasIva.length > 0) {
@@ -349,10 +373,12 @@ export class ArcaBillingService {
     const arcaResultado = invoiceResponse.response?.FeCabResp?.Resultado;
     const detResp = invoiceResponse.response?.FeDetResp?.FECAEDetResponse;
     const primerDetalle = Array.isArray(detResp) ? detResp[0] : detResp;
-    const arcaObservaciones = primerDetalle?.Observaciones?.Obs?.map((o: any) => ({
-      code: o.Code,
-      msg: o.Msg,
-    }));
+    // ARCA informa los motivos en dos lugares: Observaciones (del comprobante) y Errors (del pedido).
+    const aLista = (v: any) => (v == null ? [] : Array.isArray(v) ? v : [v]);
+    const arcaObservaciones = [
+      ...aLista(invoiceResponse.response?.Errors?.Err),
+      ...aLista(primerDetalle?.Observaciones?.Obs),
+    ].map((o: any) => ({ code: o.Code, msg: o.Msg }));
 
     if (arcaResultado === 'R') {
       throw new ArcaBusinessError(`El comprobante fue rechazado por ARCA.`, arcaObservaciones);
@@ -398,6 +424,7 @@ export class ArcaBillingService {
           emisorIngresosBrutos: empresa?.ingresosBrutos,
           emisorInicioActividades: empresa?.inicioActividades,
           emisorLogoPath: empresa?.logoPath,
+          notas: notasFce(input),
           receptorCondicionIva: NOMBRE_CONDICION_IVA[input.condicionIvaReceptor] ?? undefined,
           tipoComprobanteLetra: letra,
           tipoComprobanteNombre: nombre,
@@ -406,7 +433,7 @@ export class ArcaBillingService {
           numeroComprobante,
           fechaEmision: fecha,
           receptorRazonSocial: input.receptorRazonSocial,
-          receptorDocTipo: input.tipoDocumento === DocTipo.CUIT ? "CUIT" : (input.tipoDocumento === DocTipo.DNI ? "DNI" : "Doc"),
+          receptorDocTipo: nombreTipoDoc(input.tipoDocumento),
           receptorDocNro: input.numeroDocumento,
           receptorDomicilio: input.receptorDomicilio,
           items: input.items,
@@ -440,7 +467,7 @@ export class ArcaBillingService {
         fechaEmision: fecha,
         fechaEmisionFormateada,
         receptorRazonSocial: input.receptorRazonSocial ?? "Consumidor Final",
-        receptorDocTipo: input.tipoDocumento === DocTipo.CUIT ? "CUIT" : (input.tipoDocumento === DocTipo.DNI ? "DNI" : "Consumidor Final"),
+        receptorDocTipo: nombreTipoDoc(input.tipoDocumento),
         receptorDocNro: input.numeroDocumento,
         receptorCondicionIva: String(input.condicionIvaReceptor),
         receptorDomicilio: input.receptorDomicilio,
@@ -779,6 +806,8 @@ export class ArcaBillingService {
     // Código Opcional 2101 = CBU del emisor
     const opcionales = [
       { id: 2101, valor: input.cbuEmisor },
+      // Opcional 27 (vigente desde 2020): opción de transferencia de la FCE.
+      { id: 27, valor: input.transferencia ?? "SCA" },
     ];
     if (input.cbuAlias) {
       opcionales.push({ id: 2102, valor: input.cbuAlias });

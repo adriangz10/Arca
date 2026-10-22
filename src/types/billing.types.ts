@@ -201,6 +201,8 @@ export interface EmitirFceInput {
   cuitReceptor: number | string;
   cbuEmisor: string; // 22 dígitos obligatorio para MiPyMEs
   cbuAlias?: string;
+  /** Opción de transferencia (opcional 27): SCA = Sistema de Circulación Abierta, ADC = Agente de Depósito Colectivo. */
+  transferencia?: "SCA" | "ADC";
   receptorRazonSocial?: string;
   importeNeto: number;
   alicuotasIva?: ItemIva[];

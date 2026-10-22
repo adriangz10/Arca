@@ -1,13 +1,11 @@
 import "dotenv/config";
-import fs from "node:fs";
-import path from "node:path";
 import mysql, { type Pool, type PoolConnection, type ResultSetHeader } from "mysql2/promise";
 
 /**
  * Capa de acceso a MySQL.
  *
  * - `initDatabase()` crea la base si no existe, aplica el esquema y (una sola vez)
- *   importa los datos que había en la base SQLite anterior (data/arca.db).
+ *   carga los valores por defecto de la configuración del bot.
  * - `query` / `queryOne` / `execute` usan siempre parámetros (`?`), nunca SQL armado
  *   con strings del usuario.
  */
@@ -64,8 +62,8 @@ export function initDatabase(): Promise<void> {
         await admin.end();
       }
       await applySchema();
-      await importLegacySqlite();
-      await importLegacySqliteTickets();
+      await migrarColumnas();
+      await sembrarConfiguracion();
     })().catch((err) => {
       initPromise = null; // permite reintentar
       throw err;
@@ -131,6 +129,14 @@ const SCHEMA: string[] = [
     applied_at VARCHAR(30) NOT NULL
   )`,
 
+  // Configuración general del bot (antes estaba en el .env)
+  `CREATE TABLE IF NOT EXISTS configuracion (
+    clave VARCHAR(60) PRIMARY KEY,
+    valor VARCHAR(255) NOT NULL,
+    descripcion VARCHAR(255) NULL,
+    updated_at VARCHAR(30) NOT NULL
+  ) ENGINE=InnoDB`,
+
   // Empresas emisoras (cada una factura con su CUIT)
   `CREATE TABLE IF NOT EXISTS empresas (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -145,6 +151,8 @@ const SCHEMA: string[] = [
     email VARCHAR(150) NULL,
     monotributo_categoria VARCHAR(2) NULL,
     monotributo_tope_anual DECIMAL(15,2) NULL,
+    concepto_default TINYINT NOT NULL DEFAULT 2 COMMENT '1 productos, 2 servicios, 3 ambos',
+    cbu VARCHAR(22) NULL COMMENT 'CBU del emisor: obligatorio para Factura de Crédito Electrónica MiPyME',
     logo_path VARCHAR(255) NULL,
     cert_modo ENUM('SISTEMA','PROPIO') NOT NULL DEFAULT 'SISTEMA'
       COMMENT 'SISTEMA = usa el certificado del .env por delegación; PROPIO = certificado de la empresa',
@@ -286,125 +294,41 @@ const SCHEMA: string[] = [
   ) ENGINE=InnoDB`,
 ];
 
+/** Valores iniciales de la configuración (no pisa los que ya se cambiaron). */
+export const CONFIGURACION_INICIAL: Array<{ clave: string; valor: string; descripcion: string }> = [
+  { clave: "consumidor_final_tope", valor: "10000000", descripcion: "Monto desde el cual ARCA exige identificar al consumidor final" },
+  { clave: "sesion_ttl_minutos", valor: "15", descripcion: "Minutos que se guarda una venta a medio armar sin actividad" },
+  { clave: "consultar_padron", valor: "true", descripcion: "Consultar el padrón de ARCA (ws_sr_constancia_inscripcion) con cada CUIT" },
+  { clave: "verificar_fce", valor: "true", descripcion: "Verificar con ARCA (wsfecred) si el cliente está obligado a recibir Factura de Crédito MiPyME" },
+  { clave: "arca_produccion", valor: "false", descripcion: "false = homologación (pruebas), true = producción. Se aplica a las empresas nuevas" },
+];
+
+/** Columnas agregadas después de crear la tabla (para bases ya existentes). */
+async function migrarColumnas(): Promise<void> {
+  const p = getPool();
+  const [cols]: any = await p.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'empresas'`,
+    [getDatabaseName()]
+  );
+  const existentes = new Set(cols.map((c: any) => c.COLUMN_NAME));
+  if (!existentes.has("cbu")) await p.query(`ALTER TABLE empresas ADD COLUMN cbu VARCHAR(22) NULL AFTER concepto_default`);
+}
+
+async function sembrarConfiguracion(): Promise<void> {
+  const p = getPool();
+  for (const c of CONFIGURACION_INICIAL) {
+    await p.query(
+      `INSERT IGNORE INTO configuracion (clave, valor, descripcion, updated_at) VALUES (?, ?, ?, ?)`,
+      [c.clave, c.valor, c.descripcion, new Date().toISOString()]
+    );
+  }
+}
+
 async function applySchema(): Promise<void> {
   const p = getPool();
   for (const stmt of SCHEMA) {
     await p.query(stmt);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Importación única desde SQLite (versión anterior del proyecto)
-// ---------------------------------------------------------------------------
-
-async function importLegacySqlite(): Promise<void> {
-  const p = getPool();
-  const MIGRATION = "import_sqlite_v1";
-  const [done]: any = await p.query(`SELECT 1 FROM schema_migrations WHERE name = ?`, [MIGRATION]);
-  if (done.length > 0) return;
-
-  const sqlitePath = path.resolve(process.cwd(), process.env.SQLITE_DB_PATH || "data/arca.db");
-  if (process.env.SKIP_SQLITE_IMPORT !== "true" && fs.existsSync(sqlitePath)) {
-    try {
-      const { default: Database } = await import("better-sqlite3");
-      const old = new Database(sqlitePath, { readonly: true, fileMustExist: true });
-      const tablas = new Set((old.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as any[]).map((t) => t.name));
-      const cuitDefault = Number(String(process.env.ARCA_CUIT || "0").replace(/\D/g, "")) || 0;
-      let nFacturas = 0;
-      let nClientes = 0;
-
-      if (tablas.has("invoices")) {
-        for (const r of old.prepare(`SELECT * FROM invoices`).all() as any[]) {
-          const emisorCuit = Number(r.emisor_cuit) || cuitDefault;
-          const id = `${emisorCuit}-${r.punto_venta}-${r.tipo_comprobante}-${r.numero_comprobante}`;
-          const res: any = await p.query(
-            `INSERT IGNORE INTO invoices (
-              id, emisor_cuit, emisor_razon_social, punto_venta, tipo_comprobante, tipo_comprobante_nombre,
-              tipo_comprobante_letra, numero_comprobante, numero_formateado, fecha_emision, fecha_emision_formateada,
-              receptor_razon_social, receptor_doc_tipo, receptor_doc_nro, receptor_condicion_iva, receptor_domicilio,
-              importe_neto, importe_iva, importe_tributos, importe_total, items_json, cae, cae_vencimiento, qr_url,
-              pdf_path, pdf_file_name, concepto, fecha_servicio_desde, fecha_servicio_hasta, fecha_vencimiento_pago,
-              moneda_id, moneda_cotizacion, alicuotas_iva_json, tributos_json, comprobantes_asociados_json,
-              opcionales_json, arca_resultado, arca_observaciones_json, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [
-              id, emisorCuit, r.emisor_razon_social ?? null, r.punto_venta, r.tipo_comprobante, r.tipo_comprobante_nombre,
-              r.tipo_comprobante_letra, r.numero_comprobante, r.numero_formateado, r.fecha_emision, r.fecha_emision_formateada,
-              r.receptor_razon_social, r.receptor_doc_tipo, String(r.receptor_doc_nro), String(r.receptor_condicion_iva),
-              r.receptor_domicilio ?? null, r.importe_neto, r.importe_iva, r.importe_tributos, r.importe_total,
-              r.items_json ?? null, r.cae, r.cae_vencimiento, r.qr_url, r.pdf_path ?? null, r.pdf_file_name ?? null,
-              r.concepto ?? null, r.fecha_servicio_desde ?? null, r.fecha_servicio_hasta ?? null,
-              r.fecha_vencimiento_pago ?? null, r.moneda_id ?? "PES", r.moneda_cotizacion ?? 1,
-              r.alicuotas_iva_json ?? null, r.tributos_json ?? null, r.comprobantes_asociados_json ?? null,
-              r.opcionales_json ?? null, r.arca_resultado ?? null, r.arca_observaciones_json ?? null, r.created_at,
-            ]
-          );
-          nFacturas += res[0].affectedRows;
-        }
-      }
-
-      if (tablas.has("clientes")) {
-        for (const r of old.prepare(`SELECT * FROM clientes`).all() as any[]) {
-          const res: any = await p.query(
-            `INSERT IGNORE INTO clientes (id, doc_tipo, doc_nro, razon_social, condicion_iva, domicilio, updated_at)
-             VALUES (?,?,?,?,?,?,?)`,
-            [r.id, r.doc_tipo, r.doc_nro, r.razon_social, r.condicion_iva, r.domicilio ?? null, r.updated_at]
-          );
-          nClientes += res[0].affectedRows;
-        }
-      }
-      old.close();
-      console.log(`[MySQL] Importados desde SQLite: ${nFacturas} comprobantes y ${nClientes} clientes (${sqlitePath}).`);
-    } catch (err: any) {
-      // No se marca como hecha: se reintenta en el próximo arranque.
-      console.warn("[MySQL] No se pudo importar la base SQLite anterior:", err?.message ?? err);
-      return;
-    }
-  }
-
-  await p.query(`INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)`, [MIGRATION, new Date().toISOString()]);
-}
-
-/**
- * Tickets WSAA vigentes de la base SQLite: si no se traen, ARCA rechaza pedir uno nuevo
- * ("ya posee un TA válido") hasta que venza el anterior (hasta 12 h).
- * Se re-indexan por huella del certificado del .env, que es con el que se pidieron.
- */
-async function importLegacySqliteTickets(): Promise<void> {
-  const p = getPool();
-  const MIGRATION = "import_sqlite_tickets_v1";
-  const [done]: any = await p.query(`SELECT 1 FROM schema_migrations WHERE name = ?`, [MIGRATION]);
-  if (done.length > 0) return;
-
-  const sqlitePath = path.resolve(process.cwd(), process.env.SQLITE_DB_PATH || "data/arca.db");
-  if (process.env.SKIP_SQLITE_IMPORT !== "true" && fs.existsSync(sqlitePath)) {
-    try {
-      const { default: Database } = await import("better-sqlite3");
-      const { loadArcaConfig } = await import("../config/arca.config.js");
-      const { huellaCertificado } = await import("../utils/crypto.utils.js");
-      const cert = loadArcaConfig().cert;
-      const old = new Database(sqlitePath, { readonly: true, fileMustExist: true });
-      const hay = old.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='arca_tickets'`).get();
-      if (cert && hay) {
-        const huella = huellaCertificado(cert);
-        const ahora = new Date().toISOString();
-        for (const r of old.prepare(`SELECT * FROM arca_tickets WHERE expiration_time > ?`).all(ahora) as any[]) {
-          const id = `${huella}_${r.service_name}_${r.production ? "prod" : "homo"}`;
-          await p.query(
-            `INSERT IGNORE INTO arca_tickets (id, cuit, service_name, production, token, sign, generation_time,
-               expiration_time, header_json, credentials_json, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-            [id, r.cuit, r.service_name, r.production ? 1 : 0, r.token, r.sign, r.generation_time,
-              r.expiration_time, r.header_json, r.credentials_json, r.updated_at]
-          );
-        }
-      }
-      old.close();
-    } catch (err: any) {
-      console.warn("[MySQL] No se pudieron importar los tickets WSAA anteriores:", err?.message ?? err);
-      return;
-    }
-  }
-  await p.query(`INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)`, [MIGRATION, new Date().toISOString()]);
 }
 
 // ---------------------------------------------------------------------------

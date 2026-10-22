@@ -10,6 +10,7 @@ import { requireApiKey, resolverEmpresa } from "./middlewares/auth.middleware.js
 import { whatsappRoutes } from "../whatsapp/whatsapp.routes.js";
 import { isWhatsAppConfigured, loadWhatsAppConfig } from "../whatsapp/whatsapp.config.js";
 import { EmpresaRepository } from "../empresas/empresa.repository.js";
+import { cuitDelSistema } from "../config/arca.config.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -85,13 +86,15 @@ async function arrancar(): Promise<void> {
   await initDatabase();
 
   const wa = loadWhatsAppConfig();
-  const empresaEnv = await EmpresaRepository.sembrarDesdeEnv(wa.allowedNumbers);
   const totalEmpresas = await EmpresaRepository.contar();
+  const cuitSistema = cuitDelSistema();
 
   const server = app.listen(PORT, () => {
     console.log(`\n======================================================`);
     console.log(` Servidor ARCA Facturación API iniciado`);
     console.log(` Base de datos: MySQL (${getDatabaseName()}) · ${totalEmpresas} empresa(s)`);
+    console.log(` Certificado ARCA del sistema: ${cuitSistema ? `CUIT ${cuitSistema}` : "⚠ no encontrado (ARCA_CERT_PATH / ARCA_KEY_PATH)"}`);
+    if (totalEmpresas === 0) console.log(` Sin empresas: el primer mensaje de WhatsApp arranca la configuración inicial.`);
     console.log(` Escuchando en: http://localhost:${PORT}`);
     console.log(` API REST: ${process.env.API_KEY ? "protegida con X-API-Key" : "⚠ sin API_KEY: solo responde a localhost"}`);
     if (isWhatsAppConfigured(wa)) {
@@ -100,12 +103,6 @@ async function arrancar(): Promise<void> {
       if (!wa.appSecret) console.log(` ⚠ WHATSAPP_APP_SECRET vacío: no se valida la firma de los webhooks.`);
     } else {
       console.log(` Bot WhatsApp: desactivado (faltan variables WHATSAPP_* en .env)`);
-    }
-    if (empresaEnv && (!empresaEnv.ingresosBrutos || !empresaEnv.inicioActividades)) {
-      console.log(
-        ` ⚠ A "${empresaEnv.razonSocial}" le faltan Ingresos Brutos / Inicio de actividades para el PDF ` +
-          `(cargá ARCA_EMISOR_IIBB y ARCA_EMISOR_INICIO_ACTIVIDADES=AAAA-MM-DD en .env y reiniciá).`
-      );
     }
     console.log(`======================================================\n`);
   });

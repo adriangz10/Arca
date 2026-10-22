@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { conEmpresa } from "../../empresas/empresa.context.js";
 import { EmpresaRepository } from "../../empresas/empresa.repository.js";
+import { ConfiguracionRepository } from "../../config/configuracion.repository.js";
 
 function esLoopback(ip: string | undefined): boolean {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
@@ -42,12 +43,12 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
 
 /**
  * Elige la empresa emisora del pedido: header `X-Empresa-Cuit` (o `X-Empresa-Id`);
- * si no viene ninguno, la empresa del .env. Todo lo que pase después (ARCA, historial,
+ * si no viene ninguno, la primera empresa registrada. Todo lo que pase después (ARCA, historial,
  * PDF) corre dentro de esa empresa.
  */
 export async function resolverEmpresa(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const produccion = process.env.ARCA_PRODUCTION === "true";
+    const { arcaProduccion: produccion } = await ConfiguracionRepository.obtener();
     const cuitHeader = req.get("x-empresa-cuit")?.replace(/\D/g, "");
     const idHeader = req.get("x-empresa-id");
 
@@ -65,7 +66,13 @@ export async function resolverEmpresa(req: Request, res: Response, next: NextFun
       res.status(403).json({ success: false, error: { code: "EMPRESA_INACTIVA", message: "La empresa está desactivada." } });
       return;
     }
-    if (!empresa) return next();
+    if (!empresa) {
+      res.status(409).json({
+        success: false,
+        error: { code: "SIN_EMPRESAS", message: "Todavía no hay empresas registradas: configurá la primera por WhatsApp." },
+      });
+      return;
+    }
 
     // `next` se llama dentro del contexto: los handlers async heredan la empresa.
     await conEmpresa(empresa, async () => next());

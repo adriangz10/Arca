@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { CbteTipo, CondicionIVAReceptor } from "../constants/arca.constants.js";
+import { CbteTipo } from "../constants/arca.constants.js";
+import { ConfiguracionRepository } from "../config/configuracion.repository.js";
+import { cuitDelSistema } from "../config/arca.config.js";
 import { conEmpresa } from "../empresas/empresa.context.js";
 import { EmpresaRepository } from "../empresas/empresa.repository.js";
 import { NOMBRE_CONDICION_EMISOR, type CondicionIvaEmisor, type Empresa } from "../empresas/empresa.types.js";
@@ -35,6 +37,8 @@ export type PasoRegistro =
   | "inicio_actividades"
   | "punto_venta"
   | "monotributo_categoria"
+  | "monotributo_tope"
+  | "concepto_default"
   | "email"
   | "logo"
   | "certificado_modo"
@@ -53,6 +57,8 @@ export interface DatosRegistro {
   inicioActividades?: string; // YYYY-MM-DD
   puntoVenta?: number;
   monotributoCategoria?: string | null;
+  monotributoTopeAnual?: number | null;
+  conceptoDefault?: 1 | 2 | 3;
   email?: string | null;
   logoPath?: string | null;
   certModo?: "SISTEMA" | "PROPIO";
@@ -79,8 +85,8 @@ const DIR_LOGOS = () => path.resolve(process.cwd(), "data", "logos");
 
 /** Pasos que se cuentan en "Paso X de N" (los de certificado cuentan como uno). */
 const PASOS_VISIBLES: PasoRegistro[] = [
-  "cuit", "razon_social", "nombre_fantasia", "domicilio", "condicion_iva", "iibb",
-  "inicio_actividades", "punto_venta", "monotributo_categoria", "email", "logo", "certificado_modo",
+  "cuit", "razon_social", "nombre_fantasia", "domicilio", "condicion_iva", "iibb", "inicio_actividades",
+  "punto_venta", "monotributo_categoria", "monotributo_tope", "concepto_default", "email", "certificado_modo", "logo",
 ];
 
 const CONDICIONES: Array<{ code: CondicionIvaEmisor; title: string }> = [
@@ -90,8 +96,14 @@ const CONDICIONES: Array<{ code: CondicionIvaEmisor; title: string }> = [
 ];
 
 const CORREGIBLES: Array<{ id: string; title: string; limpiar: (d: DatosRegistro) => void }> = [
-  { id: "razon_social", title: "Razón social", limpiar: (d) => (d.razonSocial = undefined) },
-  { id: "nombre_fantasia", title: "Nombre de fantasía", limpiar: (d) => (d.nombreFantasia = undefined) },
+  {
+    id: "razon_social",
+    title: "Razón social / fantasía",
+    limpiar: (d) => {
+      d.razonSocial = undefined;
+      d.nombreFantasia = undefined;
+    },
+  },
   { id: "domicilio", title: "Domicilio comercial", limpiar: (d) => (d.domicilioComercial = undefined) },
   {
     id: "condicion_iva",
@@ -99,11 +111,13 @@ const CORREGIBLES: Array<{ id: string; title: string; limpiar: (d: DatosRegistro
     limpiar: (d) => {
       d.condicionIva = undefined;
       d.monotributoCategoria = undefined;
+      d.monotributoTopeAnual = undefined;
     },
   },
   { id: "iibb", title: "Ingresos Brutos", limpiar: (d) => (d.ingresosBrutos = undefined) },
   { id: "inicio_actividades", title: "Inicio de actividades", limpiar: (d) => (d.inicioActividades = undefined) },
   { id: "punto_venta", title: "Punto de venta", limpiar: (d) => (d.puntoVenta = undefined) },
+  { id: "concepto_default", title: "Qué vende", limpiar: (d) => (d.conceptoDefault = undefined) },
   { id: "email", title: "Email", limpiar: (d) => (d.email = undefined) },
   { id: "logo", title: "Logo", limpiar: (d) => (d.logoPath = undefined) },
   {
@@ -177,15 +191,6 @@ export function tipoImagen(buf: Buffer): "png" | "jpg" | null {
   return null;
 }
 
-function condicionDesdePadron(code?: number): CondicionIvaEmisor | undefined {
-  if (code === CondicionIVAReceptor.RESPONSABLE_INSCRIPTO) return "RESPONSABLE_INSCRIPTO";
-  if (code === CondicionIVAReceptor.RESPONSABLE_MONOTRIBUTO || code === CondicionIVAReceptor.MONOTRIBUTISTA_SOCIAL) {
-    return "MONOTRIBUTO";
-  }
-  if (code === CondicionIVAReceptor.IVA_SUJETO_EXENTO) return "EXENTO";
-  return undefined;
-}
-
 /** Siguiente dato que falta pedir. */
 export function siguientePaso(d: DatosRegistro): PasoRegistro {
   if (d.cuit === undefined) return "cuit";
@@ -197,11 +202,14 @@ export function siguientePaso(d: DatosRegistro): PasoRegistro {
   if (d.inicioActividades === undefined) return "inicio_actividades";
   if (d.puntoVenta === undefined) return "punto_venta";
   if (d.condicionIva === "MONOTRIBUTO" && d.monotributoCategoria === undefined) return "monotributo_categoria";
+  if (d.condicionIva === "MONOTRIBUTO" && d.monotributoCategoria && d.monotributoTopeAnual === undefined) return "monotributo_tope";
+  if (d.conceptoDefault === undefined) return "concepto_default";
   if (d.email === undefined) return "email";
-  if (d.logoPath === undefined) return "logo";
   if (d.certModo === undefined) return "certificado_modo";
   if (d.certModo === "PROPIO" && !d.certPem) return "certificado_crt";
   if (d.certModo === "PROPIO" && !d.keyCifrada) return "certificado_key";
+  // El logo es lo último: después de esto ya se puede facturar.
+  if (d.logoPath === undefined) return "logo";
   return "confirmar";
 }
 
@@ -212,26 +220,41 @@ export function siguientePaso(d: DatosRegistro): PasoRegistro {
 type ClienteWa = Pick<WhatsAppClient, "sendText" | "sendButtons" | "sendList" | "downloadMedia">;
 
 export class RegistroEmpresaFlow {
-  constructor(
-    private wa: ClienteWa,
-    private opciones: { produccion: boolean; cuitSistema?: number }
-  ) {}
+  private cuitSistema = cuitDelSistema();
 
-  public async iniciar(sesion: SesionBot): Promise<void> {
+  constructor(private wa: ClienteWa) {}
+
+  /**
+   * @param bienvenida true la primera vez que escribe un número sin empresas: el bot se
+   *   presenta y arranca la configuración inicial.
+   */
+  public async iniciar(sesion: SesionBot, bienvenida = false): Promise<void> {
     sesion.estado = "REGISTRO_EMPRESA";
     sesion.registro = { paso: "cuit", datos: {} };
-    sesion.borrador = {};
-    sesion.facturaResuelta = undefined;
+    sesion.venta = undefined;
+    sesion.anulacionFacturaId = undefined;
     await this.wa.sendText(
       sesion.telefono,
-      [
-        "🏢 *Registro de una empresa nueva*",
-        "",
-        "Te voy a pedir los datos fiscales que van en la factura. Tarda unos 3 minutos.",
-        "Podés escribir _cancelar_ en cualquier momento.",
-      ].join("\n")
+      bienvenida
+        ? [
+            "👋 ¡Hola! Soy tu bot de facturación electrónica de ARCA.",
+            "",
+            "Antes de facturar necesito *configurar tu empresa*: los datos fiscales que van en cada factura y el logo para el PDF. Tarda unos 3 minutos.",
+            "",
+            "Podés escribir _cancelar_ en cualquier momento y retomarlo después.",
+          ].join("\n")
+        : [
+            "🏢 *Registro de una empresa nueva*",
+            "",
+            "Te voy a pedir los datos fiscales que van en la factura. Tarda unos 3 minutos.",
+            "Podés escribir _cancelar_ en cualquier momento.",
+          ].join("\n")
     );
     await this.preguntar(sesion);
+  }
+
+  private async produccion(): Promise<boolean> {
+    return (await ConfiguracionRepository.obtener()).arcaProduccion;
   }
 
   /** Descarta el registro en curso (y el logo que se haya subido). */
@@ -292,7 +315,10 @@ export class RegistroEmpresaFlow {
         const c = parsearCondicionEmisor(texto);
         if (!c) return this.reintentar(sesion, "No entendí. Elegí una opción: Monotributo, Responsable Inscripto o Exento.");
         d.condicionIva = c;
-        if (c !== "MONOTRIBUTO") d.monotributoCategoria = null;
+        if (c !== "MONOTRIBUTO") {
+          d.monotributoCategoria = null;
+          d.monotributoTopeAnual = null;
+        }
         break;
       }
 
@@ -329,6 +355,24 @@ export class RegistroEmpresaFlow {
         d.monotributoCategoria = cat;
         break;
       }
+
+      case "monotributo_tope": {
+        if (esSaltar(texto)) {
+          d.monotributoTopeAnual = null;
+          break;
+        }
+        const n = Number(texto.replace(/[^0-9,]/g, "").replace(",", "."));
+        if (!Number.isFinite(n) || n < 1000) return this.reintentar(sesion, "Escribí el tope en pesos (ej: _26.000.000_) o tocá _Saltar_.");
+        d.monotributoTopeAnual = Math.round(n);
+        break;
+      }
+
+      case "concepto_default":
+        if (/servic/i.test(texto)) d.conceptoDefault = 2;
+        else if (/ambos|los dos/i.test(texto)) d.conceptoDefault = 3;
+        else if (/product|mercader|cosas/i.test(texto)) d.conceptoDefault = 1;
+        else return this.preguntar(sesion);
+        break;
 
       case "email": {
         if (esSaltar(texto)) {
@@ -380,7 +424,10 @@ export class RegistroEmpresaFlow {
       if (reg.padron.domicilio) d.domicilioComercial = reg.padron.domicilio;
       if (reg.padron.condicionIva) {
         d.condicionIva = reg.padron.condicionIva;
-        if (d.condicionIva !== "MONOTRIBUTO") d.monotributoCategoria = null;
+        if (d.condicionIva !== "MONOTRIBUTO") {
+          d.monotributoCategoria = null;
+          d.monotributoTopeAnual = null;
+        }
       }
     } else if (valor === "padron_manual") {
       reg.padron = undefined;
@@ -389,11 +436,16 @@ export class RegistroEmpresaFlow {
       if (!CONDICIONES.some((o) => o.code === c)) return;
       d.condicionIva = c;
       d.monotributoCategoria = c === "MONOTRIBUTO" ? undefined : null;
+      d.monotributoTopeAnual = c === "MONOTRIBUTO" ? undefined : null;
+    } else if (valor.startsWith("concepto_")) {
+      const c = Number(valor.slice(9));
+      if (c === 1 || c === 2 || c === 3) d.conceptoDefault = c;
     } else if (valor === "iibb_cuit") {
       d.ingresosBrutos = d.cuit ? formatearCuit(d.cuit) : undefined;
     } else if (valor === "saltar") {
       if (reg.paso === "nombre_fantasia") d.nombreFantasia = null;
       else if (reg.paso === "monotributo_categoria") d.monotributoCategoria = null;
+      else if (reg.paso === "monotributo_tope") d.monotributoTopeAnual = null;
       else if (reg.paso === "email") d.email = null;
       else if (reg.paso === "logo") d.logoPath = null;
     } else if (valor === "cert_sistema") {
@@ -428,7 +480,7 @@ export class RegistroEmpresaFlow {
     }
     const cuit = Number(digitos);
 
-    const existente = await EmpresaRepository.porCuit(cuit, this.opciones.produccion);
+    const existente = await EmpresaRepository.porCuit(cuit, await this.produccion());
     if (existente) {
       const propia = await EmpresaRepository.tieneAcceso(existente.id, sesion.telefono);
       await this.descartar(sesion);
@@ -448,11 +500,18 @@ export class RegistroEmpresaFlow {
     // Se intenta completar con el padrón de ARCA (si el servicio está habilitado para el certificado).
     await this.wa.sendText(sesion.telefono, "🔎 Buscando el CUIT en el padrón de ARCA...");
     const padron = await PadronService.consultar(digitos).catch(() => null);
-    if (padron?.razonSocial && padron.fuente === "PADRON") {
+    if (padron && padron.estado !== "NO_DISPONIBLE" && padron.razonSocial) {
       reg.padron = {
         razonSocial: limpiarTexto(padron.razonSocial).slice(0, 150),
         domicilio: padron.domicilio ? limpiarTexto(padron.domicilio).slice(0, 255) : undefined,
-        condicionIva: condicionDesdePadron(padron.condicionIva),
+        condicionIva:
+          padron.estado === "OK"
+            ? padron.condicion === "RESPONSABLE_INSCRIPTO"
+              ? "RESPONSABLE_INSCRIPTO"
+              : padron.condicion === "EXENTO"
+                ? "EXENTO"
+                : "MONOTRIBUTO"
+            : undefined,
       };
       reg.paso = "confirmar_padron";
     } else {
@@ -556,11 +615,13 @@ export class RegistroEmpresaFlow {
           puntoVenta: d.puntoVenta!,
           email: d.email ?? undefined,
           monotributoCategoria: d.monotributoCategoria ?? undefined,
+          monotributoTopeAnual: d.monotributoTopeAnual ?? undefined,
+          conceptoDefault: d.conceptoDefault ?? 2,
           logoPath: d.logoPath ?? undefined,
           certModo: d.certModo!,
           certPem: d.certPem,
           keyPem: d.keyCifrada ? descifrar(d.keyCifrada) : undefined,
-          produccion: this.opciones.produccion,
+          produccion: await this.produccion(),
         },
         sesion.telefono
       );
@@ -598,11 +659,11 @@ export class RegistroEmpresaFlow {
           new Promise<never>((_, rej) => setTimeout(() => rej(new Error("ARCA no respondió a tiempo")), 25_000)),
         ])
       );
-      return `🟢 Conexión con ARCA OK. Punto de venta ${empresa.puntoVenta}: último comprobante N° ${r.ultimoNumero}.\n\nYa podés facturar: mandame por ejemplo _Facturale 10 mil a consumidor final por servicio técnico_.`;
+      return `🟢 Conexión con ARCA OK. Punto de venta ${empresa.puntoVenta}: último comprobante N° ${r.ultimoNumero}.\n\n🎉 *Configuración lista.* Ya podés facturar: mandame por ejemplo _nueva venta de papel por 12000_.`;
     } catch (err: any) {
       const delegacion =
-        empresa.certModo === "SISTEMA" && this.opciones.cuitSistema
-          ? `\n• Que la empresa haya delegado el servicio *Facturación Electrónica* al CUIT ${formatearCuit(this.opciones.cuitSistema)} (ARCA > Administrador de Relaciones de Clave Fiscal).`
+        empresa.certModo === "SISTEMA" && this.cuitSistema
+          ? `\n• Que la empresa haya delegado el servicio *Facturación Electrónica* al CUIT ${formatearCuit(this.cuitSistema)} (ARCA > Administrador de Relaciones de Clave Fiscal).`
           : "";
       return [
         `🟠 La empresa quedó guardada, pero ARCA respondió: _${String(err?.message ?? err).slice(0, 200)}_`,
@@ -710,6 +771,26 @@ export class RegistroEmpresaFlow {
         await this.wa.sendButtons(tel, `${p}¿En qué *categoría de Monotributo* está? (letra A a K) — la uso para avisarte si te acercás al tope.`, [saltar]);
         return;
 
+      case "monotributo_tope":
+        await this.wa.sendButtons(
+          tel,
+          `${p}¿Cuál es el *tope anual de facturación* de la categoría ${d.monotributoCategoria}? (ej: _26.000.000_) — te aviso cuando llegues al 75%.`,
+          [saltar]
+        );
+        return;
+
+      case "concepto_default":
+        await this.wa.sendButtons(
+          tel,
+          `${p}¿Qué vende principalmente la empresa? (lo uso cuando una venta no lo deja claro)`,
+          [
+            { id: id("concepto_1"), title: "Productos" },
+            { id: id("concepto_2"), title: "Servicios" },
+            { id: id("concepto_3"), title: "Ambos" },
+          ]
+        );
+        return;
+
       case "email":
         await this.wa.sendButtons(tel, `${p}¿Un *email* de contacto de la empresa? (opcional)`, [saltar]);
         return;
@@ -728,8 +809,8 @@ export class RegistroEmpresaFlow {
           [
             `${p}¿Cómo se conecta la empresa con ARCA?`,
             "",
-            this.opciones.cuitSistema
-              ? `• *Delegación* (recomendado): la empresa delega en ARCA el servicio _Facturación Electrónica_ al CUIT ${formatearCuit(this.opciones.cuitSistema)}. No hace falta mandar archivos.`
+            this.cuitSistema
+              ? `• *Delegación* (recomendado): la empresa delega en ARCA el servicio _Facturación Electrónica_ al CUIT ${formatearCuit(this.cuitSistema)}. No hace falta mandar archivos.`
               : "• *Delegación*: se usa el certificado del sistema.",
             "• *Certificado propio*: me mandás el .crt y el .key de la empresa (la clave se guarda cifrada).",
           ].join("\n"),
@@ -777,6 +858,8 @@ export class RegistroEmpresaFlow {
       d.nombreFantasia ? `• Nombre de fantasía: ${d.nombreFantasia}` : null,
       `• Domicilio comercial: ${d.domicilioComercial}`,
       `• Condición IVA: ${NOMBRE_CONDICION_EMISOR[d.condicionIva!]}${d.monotributoCategoria ? ` (Cat. ${d.monotributoCategoria})` : ""}`,
+      d.monotributoTopeAnual ? `• Tope anual: $ ${d.monotributoTopeAnual.toLocaleString("es-AR")}` : null,
+      `• Vende: ${{ 1: "productos", 2: "servicios", 3: "productos y servicios" }[d.conceptoDefault ?? 2]}`,
       `• Ingresos Brutos: ${d.ingresosBrutos}`,
       `• Inicio de actividades: ${fecha}`,
       `• Punto de venta: ${d.puntoVenta}`,

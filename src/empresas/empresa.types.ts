@@ -16,6 +16,10 @@ export interface Empresa {
   email?: string;
   monotributoCategoria?: string;
   monotributoTopeAnual?: number;
+  /** Concepto por defecto de las ventas: 1 productos, 2 servicios, 3 ambos. */
+  conceptoDefault: 1 | 2 | 3;
+  /** CBU del emisor (22 dígitos), para Factura de Crédito Electrónica MiPyME. */
+  cbu?: string;
   logoPath?: string;
   certModo: ModoCertificado;
   produccion: boolean;

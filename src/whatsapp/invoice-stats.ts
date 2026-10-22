@@ -2,7 +2,7 @@ import { CbteTipo } from "../constants/arca.constants.js";
 import { query, queryOne } from "../db/database.js";
 import type { FacturaRegistro } from "../storage/invoice-history.storage.js";
 import { formatearPesos } from "./fiscal-engine.js";
-import type { WhatsAppBotConfig } from "./whatsapp.config.js";
+import type { Empresa } from "../empresas/empresa.types.js";
 
 function fechaYYYYMMDD(d: Date): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
@@ -29,13 +29,13 @@ export async function facturacionUltimoAnio(emisorCuit: number): Promise<number>
 }
 
 /** Mensaje de alerta de tope de Monotributo, o null si no aplica. */
-export async function alertaTopeMonotributo(config: WhatsAppBotConfig, emisorCuit: number): Promise<string | null> {
-  if (config.emisorCondicion !== "MONOTRIBUTO" || !config.monotributoTopeAnual) return null;
+export async function alertaTopeMonotributo(empresa: Empresa): Promise<string | null> {
+  if (empresa.condicionIva !== "MONOTRIBUTO" || !empresa.monotributoTopeAnual) return null;
 
-  const facturado = await facturacionUltimoAnio(emisorCuit);
-  const tope = config.monotributoTopeAnual;
+  const facturado = await facturacionUltimoAnio(empresa.cuit);
+  const tope = empresa.monotributoTopeAnual;
   const pct = (facturado / tope) * 100;
-  const categoria = config.monotributoCategoria ? ` de tu Categoría ${config.monotributoCategoria}` : "";
+  const categoria = empresa.monotributoCategoria ? ` de tu Categoría ${empresa.monotributoCategoria}` : "";
 
   if (pct >= 100) {
     return `🚨 Superaste el tope${categoria}: llevás ${formatearPesos(facturado)} facturados en los últimos 12 meses (tope ${formatearPesos(tope)}). Hablá con tu contador para recategorizarte.`;

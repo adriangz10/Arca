@@ -23,9 +23,20 @@ export function validarCuit(cuit: number | string): boolean {
   return digitoVerificador === parseInt(cuitStr[10]);
 }
 
+/** CBU: 22 dígitos con sus dos dígitos verificadores (bloque banco/sucursal y bloque cuenta). */
 export function validarCbu(cbu: string): boolean {
-  const cbuStr = cbu.replace(/[^0-9]/g, '');
-  return cbuStr.length === 22;
+  const s = cbu.replace(/[^0-9]/g, '');
+  if (s.length !== 22) return false;
+  const dv = (digitos: string, pesos: number[]) => {
+    const suma = digitos.split('').reduce((acc, d, i) => acc + Number(d) * pesos[i], 0);
+    return (10 - (suma % 10)) % 10;
+  };
+  const bloque1 = s.slice(0, 8);
+  const bloque2 = s.slice(8);
+  return (
+    dv(bloque1.slice(0, 7), [7, 1, 3, 9, 7, 1, 3]) === Number(bloque1[7]) &&
+    dv(bloque2.slice(0, 13), [3, 9, 7, 1, 3, 9, 7, 1, 3, 9, 7, 1, 3]) === Number(bloque2[13])
+  );
 }
 
 export function validarEcuacionFiscal(neto: number, iva: number, trib: number, opEx: number, totConc: number, total: number): boolean {

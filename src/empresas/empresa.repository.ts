@@ -1,6 +1,6 @@
 import { execute, query, queryOne, transaction } from "../db/database.js";
 import { cifrar, descifrar } from "../utils/crypto.utils.js";
-import type { CondicionIvaEmisor, Empresa, EmpresaNueva } from "./empresa.types.js";
+import type { Empresa, EmpresaNueva } from "./empresa.types.js";
 
 interface EmpresaRow {
   id: number;
@@ -8,13 +8,15 @@ interface EmpresaRow {
   razon_social: string;
   nombre_fantasia: string | null;
   domicilio_comercial: string;
-  condicion_iva: CondicionIvaEmisor;
+  condicion_iva: Empresa["condicionIva"];
   ingresos_brutos: string | null;
   inicio_actividades: string | null;
   punto_venta: number;
   email: string | null;
   monotributo_categoria: string | null;
   monotributo_tope_anual: number | null;
+  concepto_default: number;
+  cbu: string | null;
   logo_path: string | null;
   cert_modo: "SISTEMA" | "PROPIO";
   produccion: number;
@@ -23,7 +25,7 @@ interface EmpresaRow {
 
 /** Columnas públicas: nunca se trae el certificado ni la clave salvo en `credenciales()`. */
 const COLUMNAS = `id, cuit, razon_social, nombre_fantasia, domicilio_comercial, condicion_iva, ingresos_brutos,
-  inicio_actividades, punto_venta, email, monotributo_categoria, monotributo_tope_anual, logo_path,
+  inicio_actividades, punto_venta, email, monotributo_categoria, monotributo_tope_anual, concepto_default, cbu, logo_path,
   cert_modo, produccion, activa`;
 
 function mapRow(r: EmpresaRow): Empresa {
@@ -40,6 +42,8 @@ function mapRow(r: EmpresaRow): Empresa {
     email: r.email ?? undefined,
     monotributoCategoria: r.monotributo_categoria ?? undefined,
     monotributoTopeAnual: r.monotributo_tope_anual ?? undefined,
+    cbu: r.cbu ?? undefined,
+    conceptoDefault: ([1, 2, 3].includes(r.concepto_default) ? r.concepto_default : 2) as 1 | 2 | 3,
     logoPath: r.logo_path ?? undefined,
     certModo: r.cert_modo,
     produccion: Boolean(r.produccion),
@@ -115,8 +119,8 @@ export class EmpresaRepository {
       const [res]: any = await conn.execute(
         `INSERT INTO empresas (cuit, razon_social, nombre_fantasia, domicilio_comercial, condicion_iva,
            ingresos_brutos, inicio_actividades, punto_venta, email, monotributo_categoria, monotributo_tope_anual,
-           logo_path, cert_modo, cert_pem, key_cifrada, produccion, activa, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+           concepto_default, logo_path, cert_modo, cert_pem, key_cifrada, produccion, activa, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         [
           datos.cuit,
           datos.razonSocial,
@@ -129,6 +133,7 @@ export class EmpresaRepository {
           datos.email ?? null,
           datos.monotributoCategoria ?? null,
           datos.monotributoTopeAnual ?? null,
+          datos.conceptoDefault,
           datos.logoPath ?? null,
           datos.certModo,
           datos.certModo === "PROPIO" ? datos.certPem ?? null : null,
@@ -162,6 +167,10 @@ export class EmpresaRepository {
     );
   }
 
+  public static async actualizarCbu(empresaId: number, cbu: string): Promise<void> {
+    await execute(`UPDATE empresas SET cbu = ?, updated_at = ? WHERE id = ?`, [cbu, ahora(), empresaId]);
+  }
+
   public static async actualizarLogo(empresaId: number, logoPath: string | null): Promise<void> {
     await execute(`UPDATE empresas SET logo_path = ?, updated_at = ? WHERE id = ?`, [logoPath, ahora(), empresaId]);
   }
@@ -181,62 +190,9 @@ export class EmpresaRepository {
     return Number(row?.n ?? 0);
   }
 
-  /** Empresa usada por la API REST cuando no se indica otra: la del CUIT del .env, o la primera. */
+  /** Empresa usada por la API REST cuando no se indica otra: la primera activa. */
   public static async porDefecto(): Promise<Empresa | null> {
-    const cuit = Number(String(process.env.ARCA_CUIT || "").replace(/\D/g, ""));
-    const produccion = process.env.ARCA_PRODUCTION === "true";
-    if (cuit) {
-      const e = await this.porCuit(cuit, produccion);
-      if (e) return e;
-    }
     const row = await queryOne<EmpresaRow>(`SELECT ${COLUMNAS} FROM empresas WHERE activa = 1 ORDER BY id LIMIT 1`);
     return row ? mapRow(row) : null;
-  }
-
-  /**
-   * Primer arranque: si la empresa del .env (ARCA_CUIT) no existe, la crea con los datos
-   * ARCA_EMISOR_* y le da acceso a los números de WHATSAPP_ALLOWED_NUMBERS.
-   */
-  public static async sembrarDesdeEnv(telefonosAutorizados: string[]): Promise<Empresa | null> {
-    const cuit = Number(String(process.env.ARCA_CUIT || "").replace(/\D/g, ""));
-    if (!cuit) return null;
-    const produccion = process.env.ARCA_PRODUCTION === "true";
-
-    let empresa = await this.porCuit(cuit, produccion);
-    if (!empresa) {
-      const cond = (process.env.ARCA_EMISOR_CONDICION_IVA || "MONOTRIBUTO").toUpperCase();
-      const condicionIva: CondicionIvaEmisor =
-        cond === "RESPONSABLE_INSCRIPTO" || cond === "RI" ? "RESPONSABLE_INSCRIPTO" : cond === "EXENTO" ? "EXENTO" : "MONOTRIBUTO";
-      const tope = Number(String(process.env.MONOTRIBUTO_TOPE_ANUAL || "").replace(/[^0-9.]/g, ""));
-      empresa = await this.crear({
-        cuit,
-        razonSocial: process.env.ARCA_EMISOR_RAZON_SOCIAL || `Empresa CUIT ${cuit}`,
-        domicilioComercial: process.env.ARCA_EMISOR_DOMICILIO || "-",
-        condicionIva,
-        ingresosBrutos: process.env.ARCA_EMISOR_IIBB || undefined,
-        inicioActividades: process.env.ARCA_EMISOR_INICIO_ACTIVIDADES || undefined,
-        puntoVenta: Number(process.env.ARCA_PTO_VTA || 1),
-        monotributoCategoria: process.env.MONOTRIBUTO_CATEGORIA || undefined,
-        monotributoTopeAnual: tope > 0 ? tope : undefined,
-        certModo: "SISTEMA",
-        produccion,
-      });
-      console.log(`[Empresas] Creada la empresa del .env: ${empresa.razonSocial} (CUIT ${cuit}).`);
-    } else {
-      // Completa datos fiscales que falten si se agregaron después al .env.
-      const iibb = process.env.ARCA_EMISOR_IIBB?.trim();
-      const inicio = process.env.ARCA_EMISOR_INICIO_ACTIVIDADES?.trim();
-      if ((iibb && !empresa.ingresosBrutos) || (inicio && /^\d{4}-\d{2}-\d{2}$/.test(inicio) && !empresa.inicioActividades)) {
-        await execute(
-          `UPDATE empresas SET ingresos_brutos = COALESCE(ingresos_brutos, ?), inicio_actividades = COALESCE(inicio_actividades, ?), updated_at = ? WHERE id = ?`,
-          [iibb || null, inicio && /^\d{4}-\d{2}-\d{2}$/.test(inicio) ? inicio : null, ahora(), empresa.id]
-        );
-        empresa = (await this.porId(empresa.id))!;
-      }
-    }
-    for (const tel of telefonosAutorizados) {
-      await this.vincularTelefono(empresa.id, tel, "ADMIN");
-    }
-    return empresa;
   }
 }
