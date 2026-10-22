@@ -1,0 +1,78 @@
+# =====================================================================
+#  SECRETOS — nunca deben subirse
+# =====================================================================
+# Variables de entorno (tokens de Meta, API keys, contraseña de MySQL,
+# APP_ENCRYPTION_KEY). Solo se versiona .env.example, sin valores.
+.env
+.env.*
+!.env.example
+
+# Certificados y claves privadas de ARCA
+certs/
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.csr
+
+# =====================================================================
+#  DATOS GENERADOS — se recrean o son de cada instalación
+# =====================================================================
+# Base SQLite anterior, JSON legacy y logos subidos por las empresas
+data/
+# Tickets WSAA de ARCA (credenciales de 12 h)
+tickets/
+# PDFs de comprobantes emitidos (contienen datos de clientes)
+invoices/
+# Copias de seguridad locales
+.backups/
+*.bak
+
+# Bases de datos locales y volcados de MySQL
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sql.gz
+dump*.sql
+
+# =====================================================================
+#  DEPENDENCIAS Y BUILD
+# =====================================================================
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# =====================================================================
+#  LOGS Y TEMPORALES
+# =====================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp/
+temp/
+*.tmp
+
+# =====================================================================
+#  SISTEMA OPERATIVO Y EDITORES
+# =====================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+
+# Configuración local de Claude Code
+.claude/settings.local.json

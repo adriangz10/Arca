@@ -1,0 +1,416 @@
+{
+  "info": {
+    "_postman_id": "arca-facturacion-api-collection",
+    "name": "ARCA Facturación Electrónica API (Argentina)",
+    "description": "Colección completa con TODOS los tipos de comprobantes oficiales de ARCA (CbteTipo: A, B, C, M, Notas de Crédito, Débito, Recibos y FCE MiPyMEs), Historial de Facturas, Selección por ID, PDF y QR.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string",
+      "description": "Valor de API_KEY del .env"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Diagnóstico y Tablas Oficiales",
+      "item": [
+        {
+          "name": "Consultar Estado ARCA y Ticket WSAA (12h)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Consultar Tablas Maestras Oficiales",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tables",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "tables"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Historial y Consultas de Facturas",
+      "item": [
+        {
+          "name": "Listar Todas las Facturas Emitidas (Historial)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "tipoComprobante",
+                  "value": "6",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Seleccionar Factura por ID o Número",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/1-6-1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "1-6-1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Descargar / Ver PDF de Factura por ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/1-6-1/pdf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "1-6-1",
+                "pdf"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Consultar Último Comprobante en ARCA",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/last?ptoVta=1&tipo=6",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "last"
+              ],
+              "query": [
+                {
+                  "key": "ptoVta",
+                  "value": "1"
+                },
+                {
+                  "key": "tipo",
+                  "value": "6"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Emisión de Facturas (A, B, C, M)",
+      "item": [
+        {
+          "name": "Emitir Factura B (Consumidor Final)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"importeNeto\": 100.00,\n  \"alicuotaIva\": 5,\n  \"condicionIva\": 5,\n  \"dniOCuit\": 0,\n  \"receptorRazonSocial\": \"Consumidor Final Ejemplo\",\n  \"puntoVenta\": 1,\n  \"concepto\": 1,\n  \"items\": [\n    {\n      \"descripcion\": \"Servicio de Consultoría Web\",\n      \"cantidad\": 1,\n      \"precioUnitario\": 100.00,\n      \"subtotal\": 100.00\n    }\n  ],\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/factura-b",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "factura-b"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Emitir Factura A (Responsable Inscripto)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cuitReceptor\": 20111111112,\n  \"receptorRazonSocial\": \"Empresa Cliente S.A.\",\n  \"receptorDomicilio\": \"Av. Corrientes 1234, CABA\",\n  \"importeNeto\": 1000.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 1000.00,\n      \"importe\": 210.00\n    }\n  ],\n  \"items\": [\n    {\n      \"descripcion\": \"Desarrollo de Software a Medida\",\n      \"cantidad\": 1,\n      \"precioUnitario\": 1000.00,\n      \"subtotal\": 1000.00\n    }\n  ],\n  \"puntoVenta\": 1,\n  \"concepto\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/factura-a",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "factura-a"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Emitir Factura C (Monotributo / Sin IVA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"importeTotal\": 500.00,\n  \"docTipo\": 96,\n  \"docNro\": 30123456,\n  \"receptorRazonSocial\": \"Cliente Particular\",\n  \"condicionIvaReceptor\": 5,\n  \"puntoVenta\": 1,\n  \"concepto\": 1,\n  \"items\": [\n    {\n      \"descripcion\": \"Honorarios Profesionales Monotributo\",\n      \"cantidad\": 1,\n      \"precioUnitario\": 500.00,\n      \"subtotal\": 500.00\n    }\n  ],\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/factura-c",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "factura-c"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Emitir Factura M (Régimen Retención IVA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cuitReceptor\": 20111111112,\n  \"receptorRazonSocial\": \"Empresa Pagadora\",\n  \"importeNeto\": 1000.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 1000.00,\n      \"importe\": 210.00\n    }\n  ],\n  \"puntoVenta\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/factura-m",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "factura-m"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Notas de Crédito, Débito y Recibos",
+      "item": [
+        {
+          "name": "Emitir Nota de Crédito B",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoNotaCredito\": 9,\n  \"tipoDocumento\": 99,\n  \"numeroDocumento\": 0,\n  \"condicionIvaReceptor\": 5,\n  \"importeNeto\": 100.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 100.00,\n      \"importe\": 21.00\n    }\n  ],\n  \"comprobanteAsociado\": {\n    \"tipo\": 6,\n    \"puntoVenta\": 1,\n    \"numero\": 1\n  },\n  \"puntoVenta\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/nota-credito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "nota-credito"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Emitir Nota de Débito B",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoNotaDebito\": 8,\n  \"tipoDocumento\": 99,\n  \"numeroDocumento\": 0,\n  \"condicionIvaReceptor\": 5,\n  \"importeNeto\": 50.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 50.00,\n      \"importe\": 10.50\n    }\n  ],\n  \"comprobanteAsociado\": {\n    \"tipo\": 6,\n    \"puntoVenta\": 1,\n    \"numero\": 1\n  },\n  \"puntoVenta\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/nota-debito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "nota-debito"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Emitir Recibo B",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoRecibo\": 7,\n  \"tipoDocumento\": 99,\n  \"numeroDocumento\": 0,\n  \"condicionIvaReceptor\": 5,\n  \"importeTotal\": 121.00,\n  \"importeNeto\": 100.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 100.00,\n      \"importe\": 21.00\n    }\n  ],\n  \"puntoVenta\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/recibo",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "recibo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Factura de Crédito Electrónica MiPyMEs (FCE)",
+      "item": [
+        {
+          "name": "Emitir FCE A (MiPyMEs con CBU)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoFce\": 201,\n  \"cuitReceptor\": 20111111112,\n  \"cbuEmisor\": \"0170099220000067890123\",\n  \"fechaVencimientoPago\": \"20260915\",\n  \"importeNeto\": 50000.00,\n  \"alicuotasIva\": [\n    {\n      \"id\": 5,\n      \"baseImponible\": 50000.00,\n      \"importe\": 10500.00\n    }\n  ],\n  \"puntoVenta\": 1,\n  \"generarPdf\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/vouchers/fce",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vouchers",
+                "fce"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "arca-facturacion-test",
+  "version": "1.0.0",
+  "description": "Pruebas locales de Facturación Electrónica con @arcasdk/core (ARCA/AFIP)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/api/server.ts",
+    "start": "tsx src/api/server.ts",
+    "test:estado": "tsx src/test-estado-servidor.ts",
+    "test:tablas": "tsx src/test-tablas-referencia.ts",
+    "test:ultimo-comprobante": "tsx src/test-ultimo-comprobante.ts",
+    "test:info-comprobante": "tsx src/test-info-comprobante.ts",
+    "test:db": "tsx src/test-database.ts",
+    "test:factura-b": "tsx src/test-factura-b.ts",
+    "test:factura-a": "tsx src/test-factura-a.ts",
+    "test:nota-credito-b": "tsx src/test-nota-credito-b.ts",
+    "test:whatsapp": "tsx src/test-whatsapp-bot.ts"
+  },
+  "dependencies": {
+    "@arcasdk/core": "latest",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "mysql2": "^3.24.6",
+    "pdfkit": "^0.19.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "@types/pdfkit": "^0.17.6",
+    "@types/qrcode": "^1.5.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
