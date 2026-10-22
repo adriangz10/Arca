@@ -399,6 +399,13 @@ export class RegistroEmpresaFlow {
 
       case "certificado_crt":
       case "certificado_key":
+        if (/otro certificado|cambiar certificado|de nuevo/i.test(texto)) {
+          d.certPem = undefined;
+          d.keyCifrada = undefined;
+          reg.paso = "certificado_crt";
+          return this.preguntar(sesion);
+        }
+        if (/delega/i.test(texto)) return this.boton(sesion, "cert_sistema");
         return this.reintentar(sesion, "Mandame el archivo como *documento* (clip 📎 > Documento).");
 
       case "confirmar":
@@ -573,6 +580,16 @@ export class RegistroEmpresaFlow {
       }
       const v = validarParCertificado(reg.datos.certPem ?? "", texto);
       if (!v.ok) {
+        if (v.error?.includes("no corresponde")) {
+          // El certificado está bien: solo hay que mandar la clave correcta.
+          reg.paso = "certificado_key";
+          await this.wa.sendText(
+            sesion.telefono,
+            `❌ ${v.error}\n\nEs común tener varias claves de intentos anteriores: tiene que ser la misma que usaste para generar el pedido (CSR) de ese certificado. Mandame otra clave, o escribí _otro certificado_ para empezar de nuevo.`
+          );
+          await SessionStore.save(sesion);
+          return;
+        }
         reg.datos.certPem = undefined;
         reg.datos.keyCifrada = undefined;
         reg.paso = "certificado_crt";

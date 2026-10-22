@@ -11,6 +11,7 @@ import { whatsappRoutes } from "../whatsapp/whatsapp.routes.js";
 import { isWhatsAppConfigured, loadWhatsAppConfig } from "../whatsapp/whatsapp.config.js";
 import { EmpresaRepository } from "../empresas/empresa.repository.js";
 import { cuitDelSistema } from "../config/arca.config.js";
+import { WhatsAppClient } from "../whatsapp/whatsapp.client.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -105,6 +106,14 @@ async function arrancar(): Promise<void> {
       console.log(` Bot WhatsApp: desactivado (faltan variables WHATSAPP_* en .env)`);
     }
     console.log(`======================================================\n`);
+
+    // El token de Meta se verifica al arrancar: si venció, se avisa acá y no con el primer mensaje.
+    if (isWhatsAppConfigured(wa)) {
+      new WhatsAppClient(wa).verificarToken().then((problema) => {
+        if (problema) console.error(`\n⚠ WhatsApp: ${problema}\n  El bot va a recibir mensajes pero no va a poder responder.\n`);
+        else console.log(" ✔ Token de WhatsApp válido.");
+      });
+    }
   });
 
   // Cierre ordenado: termina los pedidos en curso y libera las conexiones a MySQL.

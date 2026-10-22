@@ -174,6 +174,25 @@ export class WhatsAppClient {
     return { data, mimeType: String(meta.mime_type || fileRes.headers.get("content-type") || "application/octet-stream") };
   }
 
+  /**
+   * Verifica que el token sirva para el número configurado. Devuelve null si está todo bien,
+   * o un texto explicando el problema (token vencido, sin permisos, número equivocado).
+   */
+  public async verificarToken(): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/${this.config.phoneNumberId}?fields=id`, { headers: this.authHeaders() });
+      if (res.ok) return null;
+      const body: any = await res.json().catch(() => ({}));
+      const e = body?.error ?? {};
+      if (e.code === 190) {
+        return `el token de WhatsApp no es válido o venció (${e.message ?? "OAuthException"}). Generá un token permanente de System User en Business Settings > System Users.`;
+      }
+      return `Meta respondió ${res.status}: ${e.message ?? "error desconocido"}`;
+    } catch (err: any) {
+      return `no se pudo contactar a Meta: ${err?.message ?? err}`;
+    }
+  }
+
   /** Marca un mensaje como leído (los dos tildes azules). */
   public async markAsRead(messageId: string): Promise<void> {
     try {
